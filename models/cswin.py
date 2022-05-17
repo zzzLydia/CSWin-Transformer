@@ -90,7 +90,13 @@ class LePEAttention(nn.Module):
         H = W = int(np.sqrt(N))
         x = x.transpose(-2,-1).contiguous().view(B, C, H, W)
         x = img2windows(x, self.H_sp, self.W_sp)
+        
+        # x.shape (B*H//H_sp*W//W_sp, H_sp*W_sp, C)
+        
         x = x.reshape(-1, self.H_sp* self.W_sp, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
+        
+        # x.shape (B*H//H_sp*W//W_sp, self.num_heads,  H_sp*W_sp, C // self.num_heads)
+        
         return x
 
     def get_lepe(self, x, func):
@@ -101,11 +107,16 @@ class LePEAttention(nn.Module):
         H_sp, W_sp = self.H_sp, self.W_sp
         x = x.view(B, C, H // H_sp, H_sp, W // W_sp, W_sp)
         x = x.permute(0, 2, 4, 1, 3, 5).contiguous().reshape(-1, C, H_sp, W_sp) ### B', C, H', W'
+        
+        # x.shape: (B* H // H_sp* W // W_sp, C, H_sp, W_sp)
 
         lepe = func(x) ### B', C, H', W'
         lepe = lepe.reshape(-1, self.num_heads, C // self.num_heads, H_sp * W_sp).permute(0, 1, 3, 2).contiguous()
 
         x = x.reshape(-1, self.num_heads, C // self.num_heads, self.H_sp* self.W_sp).permute(0, 1, 3, 2).contiguous()
+        
+        ## x.shape: (B* H // H_sp* W // W_sp, num_heads, H_sp* W_sp, C//num_heads)
+        
         return x, lepe
 
     def forward(self, qkv):
@@ -122,6 +133,11 @@ class LePEAttention(nn.Module):
         q = self.im2cswin(q)
         k = self.im2cswin(k)
         v, lepe = self.get_lepe(v, self.get_v)
+        
+        
+        #q,k.shape (B*H//H_sp*W//W_sp, num_heads,  H_sp*W_sp, C //num_heads)
+        #v,lepe.shape (B* H // H_sp* W // W_sp, num_heads, H_sp* W_sp, C//num_heads)
+        
 
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))  # B head N C @ B head C N --> B head N N
@@ -130,9 +146,14 @@ class LePEAttention(nn.Module):
 
         x = (attn @ v) + lepe
         x = x.transpose(1, 2).reshape(-1, self.H_sp* self.W_sp, C)  # B head N N @ B head N C
+        
+        
+        #x.shape: (B* H // H_sp* W // W_sp, H_sp* W_sp, C)
 
         ### Window2Img
         x = windows2img(x, self.H_sp, self.W_sp, H, W).view(B, -1, C)  # B H' W' C
+        
+        #x.shape (B H*W C)
 
         return x
 
@@ -195,6 +216,9 @@ class CSWinBlock(nn.Module):
         img = self.norm1(x)
         qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
         
+        #qkv: (B, HW/3, 3, C) then (3, B, HW/3 ,C)
+        
+        
         if self.branch_num == 2:
             x1 = self.attns[0](qkv[:,:,:,:C//2])
             x2 = self.attns[1](qkv[:,:,:,C//2:])
@@ -214,6 +238,7 @@ def img2windows(img, H_sp, W_sp):
     B, C, H, W = img.shape
     img_reshape = img.view(B, C, H // H_sp, H_sp, W // W_sp, W_sp)
     img_perm = img_reshape.permute(0, 2, 4, 3, 5, 1).contiguous().reshape(-1, H_sp* W_sp, C)
+    # after permute: (B, H//H_sp, W//W_sp, H_sp, W_sp, C), after reshape: (B*H//H_sp*W//W_sp, H_sp*W_sp, C)
     return img_perm
 
 def windows2img(img_splits_hw, H_sp, W_sp, H, W):
